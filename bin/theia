@@ -1,0 +1,570 @@
+#!/usr/bin/env python
+
+# theia: poking filer
+# Theia's purpose in life is to collect and act upon filer statistics
+
+import string,sys,re,getopt,time,subprocess,os
+
+stderr = sys.stderr
+stdout = sys.stdout
+
+ME='xtheia'
+
+def cliargopts():
+
+   # initialize
+   optflags = {'debug':False,'nop':False,'config':'/local/data/filer/etc/theia.cfg','nagios':False,'datafile':None,'pickle':None}
+   filer = None
+
+   # parse cli options
+   try:
+      opts,args = getopt.getopt(sys.argv[1:],"dh",["debug","nop","raw","nagios","help","datafile=","config=","pickle="])
+      for opt,optarg in opts:
+         if opt in ["--debug","-d"]:
+            optflags['debug'] = True
+         elif opt == "--nop":
+            optflags['nop'] = True
+         elif opt in ["--raw"]:
+            optflags['raw'] = True
+         elif opt in ["--config","-c"]:
+            optflags['config'] = optarg
+         elif opt in ["--nagios"]:
+            optflags['nagios'] = True
+         elif opt in ["--datafile"]:
+            optflags['datafile'] = optarg
+         elif opt in ["--pickle"]:
+            optflags['pickle'] = optarg
+         elif opt in ["--help","-h"]:
+            stderr.write("%s [-h|--help] [--nagios] [--debug] [--datafile=<datafile>] [--config=<configfile>] <filer>\n" % (ME))
+            sys.exit(0)
+         else:
+            stderr.write("%s: error: invalid option %s\n" % (ME,opt))
+            sys.exit(1)
+      if len(args) == 0:
+         stderr.write("%s: error: no filer specified\n" % (ME))
+         sys.exit(1)
+      elif len(args) > 1:
+         stderr.write("%s: error: only one filer per invocation\n" (ME))
+         sys.exit(1)
+      else:
+         if args[0].count('.') == 0:
+            hostname = args[0] + '.ningops.com'
+            filer = args[0]
+         else:
+            hostname = args[0]
+            filer = args[0][0:args[0].find('.')]
+   except getopt.error,s:
+      stderr.write("%s: error: %s\n" % (ME,s))
+      sys.exit(1)
+
+   if optflags['debug']: stderr.write("%s: debug: %s\n%s: debug: filer: %s (%s)\n" % (ME,optflags,ME,filer,hostname))
+
+   return(optflags,filer,hostname)
+   vifautodiscover(hostname)
+
+def send_nsca(hostname,svc_descr,rt,svc_output):
+   if not optflags['nop']:
+      cmd = "/usr/local/bin/send_nsca -H nagios -c /usr/local/etc/nagios/send_nsca.conf"
+      (o,e) = subprocess.Popen(cmd,shell=True,stdin=subprocess.PIPE,stdout=subprocess.PIPE).communicate("%s\t%s\t%d\t%s\n" % (hostname,svc_descr,rt,svc_output))
+      if optflags['debug']: stderr.write("%s: debug: send_nsca: %s" % (ME, o))
+   else:
+      stdout.write("%s\n" % (svc_output))
+   if optflags['debug']:
+      stderr.write("%s: debug: send_nsca: %s, %s, %d\n" % (ME,hostname,svc_descr,rt))
+      stderr.write("%s: debug: send_ncsa: %s\n" % (ME,svc_output))
+   return True
+   
+
+
+class NAPStatSet(object):
+   
+   optflags = {'debug':False,'nop':False}
+   _iteration = 0
+   
+      
+   # 1216986302 APB:0 CIFSO:0 CPU:0 CPtime:0 CacheAge:60 CacheHit:100 DiskRead:0 DiskUtil:0 DiskWrite:0 HTTPO:0 NFSO:19 NFSRL:0 NFSRO:16 NFSWL:0 NFSWO:0 NetIn:5 NetOut:4 NetRE:0 NetSE:0 TPB:2 TapeRead:0 TapeWrite:0 TotalO:19 cpu0:0 cpu1:0 cpu2:0 cpu3:1
+      
+   xnmetrics = { 
+         'APB'    : "system:system:avg_processor_busy",
+         'CIFSO'  : None,
+         'CPU' : "system:system:cpu_busy",
+         'CPtime' : "system:system:cp_time",
+         'CacheAge' : "system:system:cache_age",
+         'CacheHit' : "system:system:cache_hit",
+         'DiskRead' : "system:system:disk_data_read",
+         'DiskUtil' : "system:system:disk_busy",
+         'DiskWrite' : "system:system:disk_data_written",
+         'HTTPO' : None,
+         'NFSO' : "nfsv3:nfs:nfsv3_ops",
+         'NFSRL' : "nfsv3:nfs:nfsv3_read_latency",
+         'NFSRO' : "nfsv3:nfs:nfsv3_read_ops",
+         'NFSWL' : "nfsv3:nfs:nfsv3_write_latency",
+         'NFSWO' : "nfsv3:nfs:nfsv3_write_ops",
+         'NetIn' : "system:system:net_data_recv",
+         'NetOut' : "system:system:net_data_sent",
+         'TPB' : "system:system:total_processor_busy",
+         'TapeRead' : None,
+         'TapeWrite' : None,
+         'TotalO' : "system:system:total_ops",
+         'cpu0' : "processor:processor0:processor_busy",
+         'cpu1' : "processor:processor1:processor_busy",
+         'cpu2' : "processor:processor2:processor_busy",
+         'cpu3' : "processor:processor3:processor_busy"
+   }
+   
+   def __init__(self,filer,_cfgfile=None,_datafile=None):
+
+      self.ctime = time.time()
+
+      self._cfgfile = _cfgfile
+      self._datafile = _datafile
+      self.filer = filer
+      
+      
+   ## Initialize thresholds
+      self.thresholds = NAPStatThreshold.Initialize(self._cfgfile)
+      
+   ## Initialize collected
+      self.collected = NAPStat.Initialize(self.filer,_datafile)
+      
+      return None
+      
+   def getNAPStat(self,objectorstatid,instance=None,counter=None):
+      if instance == None and counter == None:
+         s_object,s_instance,s_counter = NAPStat.StatidToStatcomps(objectorstatid)
+      else:
+         s_object = objectorstatid
+         s_instance = instance
+         s_counter = counter
+      
+      try:
+         return self.collected[s_object][s_instance][s_counter]
+      except KeyError:
+         return None
+         
+   def getNAPThreshold(self,objectorstatid,instance=None,counter=None):
+      if instance == None and counter == None:
+         s_object,s_instance,s_counter = NAPStatThreshold.StatidToStatcomps(objectorstatid)
+      else:
+         s_object = objectorstatid
+         s_instance = instance
+         s_counter = counter
+         
+   def getAlerts(self):
+      
+      alerts = { 'crit' : [], 'warn' : [] }
+      alerts_flag = False
+      
+      def isAlert(col,thr):
+         if optflags['debug']:
+            stderr.write("%s: debug: alert? %s %s %s" % (ME,col,thr.cmpop,thr))
+            
+         if eval("%s %s %s" % (col.svalue,thr.cmpop,thr.crit)):
+            if optflags['debug']: stderr.write("  CRITICAL\n")
+            return 'crit'
+         elif eval("%s %s %s" % (col.svalue,thr.cmpop,thr.warn)):
+            if optflags['debug']: stderr.write("  WARNING\n")
+            return 'warn'
+         else:
+            if optflags['debug']: stderr.write("   OK\n")
+            return None
+
+      for t_object in self.thresholds.keys():
+         t_instances = self.thresholds[t_object].keys()
+         
+         # case 1: all instances, no exceptions, all threshold counters
+         if len(t_instances) == 1 and t_instances[0] == '*':
+            for t_counter in self.thresholds[t_object]['*'].keys():
+               for s_instance in self.collected[t_object].keys():
+                  # compare each collected[object][instance][counter] to thresholds[object]['*'][counter]
+                  alert = isAlert(self.collected[t_object][s_instance][t_counter],self.thresholds[t_object]['*'][t_counter])
+                  if alert:
+                     alerts[alert].append("%s" % (self.getNAPStat(t_object,s_instance,t_counter)))
+         # case 2: only specific instances, all theshold counters
+         elif '*' not in t_instances:
+            for t_instance in t_instances:
+               for t_counter in self.thresholds[t_object][t_instance].keys():
+                  alert = isAlert(self.collected[t_object][t_instance][t_counter],self.thresholds[t_object][t_instance][t_counter])
+                  if alert:
+                     alerts[alert].append("%s" % (self.getNAPStat(t_object,t_instance,t_counter)))
+         # case 3: all instances with overriding exceptions
+         elif '*' in t_instances and len(t_instances) > 1:
+            for s_instance in self.collected[t_object].keys():
+               if self.thresholds[t_object].has_key(s_instance):
+                  for t_counter in self.thresholds[t_object][s_instance].keys():
+                     alert = isAlert(self.collected[t_object][s_instance][t_counter],self.thresholds[t_object][s_instance][t_counter])
+                     if alert:
+                        alerts[alert].append("%s" % (self.getNAPStat(t_object,s_instance,t_counter)))
+               else:
+                  for t_counter in self.thresholds[t_object]['*'].keys():
+                     alert = isAlert(self.collected[t_object][s_instance][t_counter],self.thresholds[t_object]['*'][t_counter])
+                     if alert:
+                        alerts[alert].append("%s" % (self.getNAPStat(t_object,s_instance,t_counter)))
+      return alerts
+      
+   def Pickle(self,picklefile):
+      
+      metrics = NAPStatSet.xnmetrics.keys()
+      metrics.sort()
+      
+      pickle = str(int(self.ctime))
+      for metric in metrics:
+         if NAPStatSet.xnmetrics[metric] == None:
+            pvalue = "0"
+         else:
+            pvalue = str(self.getNAPStat(NAPStatSet.xnmetrics[metric]).svalue)
+         pickle += " %s:%s" % (metric,pvalue)
+      try:
+         if optflags['nop']:
+            stdout.write("%s\n" % (pickle))
+         else:
+            open(optflags['pickle'],'a').write("%s\n" % (pickle))
+         if optflags['debug']: stderr.write("%s: debug: pickle [%s]: %s\n" % (ME,optflags['pickle'],pickle))
+      except IOError,e:
+         stderr.write("%s: error: %s\n" % (ME,e))
+         sys.exit(1)
+
+      pickle_basedir = os.path.dirname(optflags['pickle'])
+
+      objectnames = [ 'volume' , 'aggregate' ]
+
+      for objectname in objectnames:
+         instancenames = self.collected[objectname].keys()
+         instancenames.sort()
+         picklefile = os.path.dirname(optflags['pickle']) + "/" + objectname + "/current"
+         picklefiletmp = os.path.dirname(optflags['pickle']) + "/" + objectname + "/current.tmp"
+
+         objectpickle = ""
+         for instancename in instancenames:
+            objectpickle += "%s: " % (instancename)
+            counters = self.collected[objectname][instancename].keys()
+            counters.sort()
+            for counter in counters:
+               objectpickle += "%s=%s " % (counter,self.collected[objectname][instancename][counter].svalue)
+            objectpickle += "\n"
+
+         try:
+            if optflags['nop']:
+               stdout.write("%s" % (objectpickle))
+            else:
+               open(picklefiletmp,'w').write("%s" % (objectpickle))
+               os.rename(picklefiletmp,picklefile)
+
+            if optflags['debug']: stderr.write("%s: debug: pickle [%s]: %s" % (ME,picklefile,objectpickle))
+         except IOError,e:
+            stderr.write("%s: error: %s\n" % (ME,e))
+            sys.exit(1)
+
+class XNSysStat(object):
+   
+   def StatidToStatcomps(statid):
+      statcomps = string.split(statid,':')
+      if len(statcomps) >= 3:
+         return statcomps[0],string.join(statcomps[1:-1],':'),statcomps[-1]
+      else:
+         return None
+   StatidToStatcomps = staticmethod(StatidToStatcomps)
+   
+   def StatcompsToStatid(s_object,s_instance,s_counter):
+      return string.join((s_object,s_instance,s_counter),':')
+   StatcompsToStatid = staticmethod(StatcompsToStatid)
+   
+   
+class NAPStatThreshold(XNSysStat):
+   
+   optflags = {'debug':False,'nop':False}
+   
+   def __init__(self,thresid,warn,crit,cmpop):
+      self.thresid = thresid
+      self.tobject,self.tinstance,self.tcounter = XNSysStat.StatidToStatcomps(thresid)
+      self.warn = warn
+      self.crit = crit
+      self.cmpop = cmpop
+      
+   def __repr__(self):
+      return "[%s] w:%d c:%d op:%s" % (string.join((self.tobject,self.tinstance,self.tcounter),":"),self.warn,self.crit,self.cmpop)
+      
+   def ReadCfgFile(cls,_cfgfile):
+      'reads thresholds configuration file returns an array containing valid thresholds'
+      'it is a simple syntactic parser and makes no semantic interpretation (other than discarding comments)'
+         
+      cfgtext = []
+         
+      try:
+         cfglines = open(_cfgfile,'r').read().splitlines()
+         if optflags['debug']: stderr.write("%s: debug: reading %s configuration file\n" % (ME,_cfgfile))
+         for cfgline in open(_cfgfile,'r').read().splitlines():
+            cfgline = cfgline[0:cfgline.find('#')].strip()
+            if len(cfgline) == 0:
+               continue
+            else:
+               cfgtext.append(cfgline)
+               if optflags['debug']: stderr.write("%s: debug: line: %s\n" % (ME,cfgline))
+         return cfgtext
+      except IOError,e:
+         stderr.write("%s: error: %s\n" % (ME,e))
+         sys.exit(1)
+      return cfgtext
+   ReadCfgFile = classmethod(ReadCfgFile)
+        
+   def Initialize(cls,_cfgfile):
+      'converts an array of threshold configuration strings and returns a dictionary of thresholds'
+      
+      thresholds = {}
+      
+      def MakeThreshold(_object,_instance,_counter,_warn,_crit,_cmpop):
+         if not thresholds.has_key(_object):
+            thresholds[_object] = {}
+         if not thresholds[_object].has_key(_instance):
+            thresholds[_object][_instance] = {}
+         if not thresholds[_object][_instance].has_key(_counter):
+            thresholds[_object][_instance][_counter] = {}
+         if optflags['debug']:
+            stderr.write("%s: debug: thres: [%s] => w:%s c:%s op:%s\n" % (ME,string.join((_object,_instance,_counter),':'),_warn,_crit,_cmpop))
+         thresholds[_object][_instance][_counter] = NAPStatThreshold(string.join((_object,_instance,_counter),':'),_warn,_crit,_cmpop)
+         return thresholds[_object][_instance][_counter]
+         
+      cfgtext = NAPStatThreshold.ReadCfgFile(_cfgfile)
+        
+      cmpops = ['<','>','=','-']                                              # threshold comparison operators
+
+      for cfgline in cfgtext:
+         cfglineitems = cfgline.split(':')                                    # split into components
+         cfglineitemcount = len(cfglineitems)
+         if cfglineitemcount < 6:
+            stderr.write("%s: warning: invalid configuration line: %s; skipped\n" % (ME,_cfgline))
+            continue
+         else:
+            # Format
+            #  [filer:]object:[instance]:counter:warn:crit:cmpop              # note: some instances have ':'!
+            if cfglineitems[0] in (filer,'*'):
+               del cfglineitems[0]
+            else:
+               continue
+            thresid = string.join(cfglineitems[0:-3],":")
+            (thresobject,thresinstance,therscounter) = XNSysStat.StatidToStatcomps(thresid)
+            threswarn = int(cfglineitems[-3])
+            threscrit = int(cfglineitems[-2])
+            threscmpop = cfglineitems[-1]
+            if not threscmpop == '-':
+               MakeThreshold(thresobject,thresinstance,therscounter,threswarn,threscrit,threscmpop)
+      return thresholds
+   Initialize = classmethod(Initialize)
+   
+
+
+class NAPStat(XNSysStat):
+   'NetApp Stats'
+   
+   optflags = {'debug':False,'nop':False}
+      
+   _units = {}
+   
+   def __init__(self,sobject,sinstance,scounter,svalunit):
+      self.sobject = sobject
+      self.sinstance = sinstance
+      self.scounter = scounter
+      self.svalunit = svalunit
+      self.svalue,self.sunits =  NAPStat._valueunits(svalunit)
+      self.sxnmetric = None
+      
+   def __repr__(self):
+      return "%s" % (string.join((self.sobject,self.sinstance,self.scounter,self.svalunit),":"))
+      
+   def xnmetric(self):
+      re_cpu = re.compile("processor(\d+)")
+      if self.sobject == "system":
+         if re_cpu.match(self.sinstance):
+            return "cpu" + str(re_cpu.match(self.sinstance).group(1))
+      elif self.object == "volume" and self.scounter == "df_k_capacity":
+         return "df-k[%s]" % (self.sinstance)
+      else:
+         return None
+
+   def _valueunits(s_valunit):
+      s_value,s_units = None,None
+      re_diskname = re.compile("^[0-9]{1}[a-z]{1}\.[0-9]+$")
+      re_valunit = re.compile("^(?P<value>[-0-9.]+)(?P<units>.+)*$")
+      if re_diskname.match(s_valunit):
+         s_value,s_units = s_valunit,"str"
+      elif re_valunit.match(s_valunit):
+         s_value = re_valunit.match(s_valunit).groupdict()['value']
+         s_units = re_valunit.match(s_valunit).groupdict()['units']
+         if s_value.count('.') == 0:
+            s_value = int(s_value)
+         elif s_value.count('.') == 1:
+            s_value = float(s_value)
+         else:
+            print "ERROR: bad value (too many decimal points)"
+         if s_units == None:
+            s_units = "abs"
+      if not NAPStat._units.has_key(s_units):
+         NAPStat._units[s_units] = []
+      NAPStat._units[s_units].append(s_value)
+      return(s_value,s_units)
+   _valueunits = staticmethod(_valueunits)
+
+   def vifautodiscover(hostname):
+      if_list = []
+      vifs = []
+      # Read active network interfaces into python tuple
+      cmd = "/usr/bin/ssh -o BatchMode=yes -2 -ax -i /root/.ssh/perfstat_dsa %s 'stats show ifnet'|sed 's/:/ /g'|sort|awk '{print $2}'|uniq|tr -d '\r'" % (hostname)
+      p = subprocess.Popen(cmd,shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+      so = p.communicate()[0]
+      if_list = []
+      vifs = []
+      if_list.append(so.rstrip('\n'))
+ 
+      # Basic formatting
+      for interface in if_list:
+         vifs = interface.splitlines()
+
+      # Iterate over interface list and insert key and value into xnmetrics 
+      for vif in vifs:
+         xnmetrics["NetRE %s" % (vif)] = "ifnet:%s:recv_errors" % (vif)
+         xnmetrics["NetSE %s" % (vif)] = "ifnet:%s:send_errors" % (vif)
+
+   def Initialize(cls,filer,datafile=None):
+      
+      collected = {}
+      
+      def MakeStat(_object,_instance,_counter,_valunit):
+         if not collected.has_key(_object):
+            collected[_object] = {}
+         if not collected[_object].has_key(_instance):
+            collected[_object][_instance] = {}
+         if not collected[_object][_instance].has_key(_counter):
+            collected[_object][_instance][_counter] = {}
+         if optflags['debug']:
+            stderr.write("%s: debug:  stat: [%s][%s][%s][%s]\n" % (ME,_object,_instance,_counter,_valunit))
+         collected[_object][_instance][_counter] = NAPStat(_object,_instance,_counter,_valunit)
+         return collected[_object][_instance][_counter]
+      
+      # sysstat (can't remove header)
+      # CPU   NFS  CIFS  HTTP   Total    Net kB/s   Disk kB/s     Tape kB/s Cache Cache  CP   CP Disk    FCP iSCSI   FCP  kB/s
+      #                                  in   out   read  write  read write   age   hit time  ty util                 in   out
+      #  9%  2335     0     0    2335 13705 17460  10555      0     0     0    52   83%   0%  -   11%      0     0     0     0
+      # 44%   165     0     0     165    91  2765   8968     16     0     0     1s 100%  39%  Tn  70%      0     0     0     0
+      re_sysstat = re.compile("(?P<CPU>[0-9]+)%\s+(?P<NFSO>[0-9]+)\s+(?P<CIFSO>[0-9]+)\s+(?P<HTTPO>[0-9]+)\s+(?P<total_ops>[0-9]+)\s+(?P<NetIn>[0-9]+)\s+(?P<NetOut>[0-9]+)\s+(?P<DiskRead>[0-9]+)\s+(?P<DiskWrite>[0-9]+)\s+(?P<TapeRead>[0-9]+)\s+(?P<TapeWrite>[0-9]+)\s+>*(?P<cache_age>[0-9]+)s*\s+(?P<cache_hit>[-0-9]+)%*\s+(?P<cp_time>[0-9]+)%\s+[-A-Za-z0-9:\#]+\s+(?P<disk_busy>[0-9]+)%")
+      #################################################
+      
+      # df -k
+      # Filesystem               total       used      avail capacity  Mounted on
+      # /foo/bar/     6827882720KB 5961874644KB 866008076KB      87%  /foo/bar/
+      # /foo/bar/.snapshot 68968512KB  4704524KB 64263988KB       7%  /foo/bar/.snapshot
+      re_df_k = re.compile("^\/vol\/(?P<volume>[/a-z0-9A-F._]+)\/(\.snapsht)*\s+(?P<total>\d+)KB\s+(?P<used>\d+)KB\s+(?P<avail>\d+)KB\s+(?P<capacity>\d+)%\s+")
+      
+      # df -i
+      # Filesystem               iused      ifree  %iused  Mounted on
+      # /foo/bar1/       37944388   12682947     75%  /foo/bar1/
+      # /foo/root/                7252     788275      1%  /foo/root/
+      re_df_i = re.compile("^\/vol\/(?P<volume>[/a-z0-9A-F._]+)\/\s+(?P<iused>\d+)\s+(?P<ifree>\d+)\s+(?P<percentused>\d+)%\s+")
+      
+      
+      if datafile:
+         try:
+            cmd_output = open(datafile,'r').read().splitlines()
+         except IOError,e:
+            stderr.write("%s: error: %s\n" % (ME,e))
+            sys.exit(1)
+      else:
+         for trythis in (4,3,2,1,0):
+            cmd = "/usr/bin/ssh -o BatchMode=yes -2 -ax -i /root/.ssh/perfstat_dsa %s 'priv set -q diag; echo [sysstat] ; sysstat -c 10 -x 5 ; echo [sysstat end]; echo [stats show]; stats show -I xnsingleton -p xnsingleton; echo [stats start] ; stats start -I xnsingleton -p xnsingleton; echo [df -k]; df -k; echo [df -i]; df -i; echo [end]'" % (hostname)
+            p = subprocess.Popen(cmd,shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            so,se = p.communicate()
+            if p.returncode != 0:
+               if trythis == 0:
+                  stderr.write("%s: error: metric collection failed (rt!=0); error: %s\n" % (ME,se))
+                  sys.exit(1)
+               else:
+                  p = None
+                  continue
+            else:
+               cmd_output = so.splitlines()
+            
+      sysstat_samples = []
+      sysstat = { "cp_time" : 0, "cache_hit" : 0, "cache_age" : 0, "disk_busy" : 0, "total_ops" : 0}
+            
+      context = None
+      for line in cmd_output:
+         line = line.strip()
+         if optflags['debug']:
+            stderr.write("%s: debug:  line: %s\n" % (ME,line))
+         if line == '[stats show]':
+            context = 'stats'
+            continue
+         elif line == '[sysstat]':
+            context = 'sysstat'
+            continue
+         elif line == '[end]':
+            context = None
+            continue
+         elif line == '[df -k]':
+            context = 'df -k'
+            continue
+         elif line == '[df -i]':
+            context = 'df -i'
+            continue
+         elif line == '[stats start]':
+            context = None
+         if context == 'stats':
+            components = line.split(':')
+            if components[0] == "StatisticsID":
+               continue
+            MakeStat(components[0],string.join(components[1:-2],':'),components[-2],components[-1])
+         elif context == 'df -k':
+            if re_df_k.match(line):
+               df_k = re_df_k.match(line).groupdict()
+               MakeStat("volume",df_k["volume"],"df_k_capacity",df_k["capacity"] + "%")
+         elif context == 'df -i':
+            if re_df_i.match(line):
+               df_i = re_df_i.match(line).groupdict()
+               MakeStat("volume",df_i["volume"],"df_i_capacity",df_i["percentused"] + "%")
+         elif context == 'sysstat':
+            if line == '[sysstat end]':
+               for sline in sysstat_samples:
+                  if re_sysstat.match(sline):
+                     sysstat_tmp = re_sysstat.match(sline).groupdict()
+                     for smetric in sysstat.keys():
+                        if sysstat_tmp[smetric] == '-':
+                           sysstat[smetric] += 0
+                        else:
+                           sysstat[smetric] += int(sysstat_tmp[smetric])
+               for smetric in sysstat.keys():
+                  sysstat[smetric] = sysstat[smetric] / len(sysstat_samples)
+               MakeStat("system","system","cp_time",str(sysstat["cp_time"]) + "%")
+               MakeStat("system","system","cache_hit",str(sysstat["cache_hit"]) + "%")
+               MakeStat("system","system","cache_age",str(sysstat["cache_age"]) + "s")
+               MakeStat("system","system","disk_busy",str(sysstat["disk_busy"]) + "%")
+               MakeStat("system","system","total_ops",str(sysstat["total_ops"]) + "/s")
+            elif line.find('CPU') > -1 or line.find('in') > -1:
+               continue
+            else:
+               if re_sysstat.match(line):
+                  sysstat_samples.append(line)
+               else:
+                  stderr.write("%s: error: unable to match sysstat output: %s\n" % (ME,line))
+                  sys.exit(1)
+      return collected
+   Initialize = classmethod(Initialize)
+
+   
+if (__name__=="__main__"):
+   
+## read cli options
+   (optflags,filer,hostname) = cliargopts()
+   napstatset = NAPStatSet(filer,optflags['config'],optflags['datafile'])
+   
+   if optflags['pickle']:
+      napstatset.Pickle(optflags['pickle'])
+   if optflags['nagios']:
+      alerts = napstatset.getAlerts()
+      if optflags['debug']:
+         for alert in alerts.keys():
+            stderr.write("%s: debug: alerts: %s: %s\n" % (ME,alert,alerts[alert]))
+      if len(alerts['crit']) > 0:
+         send_nsca(hostname,"filerstats",2,"CRTITICAL: %s" % (string.join(alerts['crit'])))
+      elif len(alerts['warn']) > 0:
+         send_nsca(hostname,"filerstats",1,"WARNING: %s" % (string.join(alerts['warn'])))
+      else:
+         send_nsca(hostname,"filerstats",0,"OK")
