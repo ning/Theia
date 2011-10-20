@@ -32,3 +32,11 @@ xtheia [-h|--help] [--nagios] [--debug] [--datafile=<datafile>] [--config=<confi
 $ ./theia --debug <hostname>
 
 $ ./theia --nagios --pickle=/foo/bar/pickle_output
+
+
+Hardware Support:
+Currently hardware support is limited to the following series. Other NetApp models do not expose some of the information that theia is capable of gathering. 
+
+FAS6080A
+FAS6070A
+
