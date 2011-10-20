@@ -34,9 +34,8 @@ $ ./theia --debug <hostname>
 $ ./theia --nagios --pickle=/foo/bar/pickle_output
 
 
-Hardware Support:
-Currently hardware support is limited to the following series. Other NetApp models do not expose some of the information that theia is capable of gathering. 
-
+Hardware / OS Support:
+ONTAP 7.3
 FAS6080A
 FAS6070A
 
