@@ -1,1 +1,34 @@
 This is theia, a NetApp monitoring tool that works with Nagios and Zenoss.
+
+Basic Configuration:
+git clone git@github.com:ning/Theia.git
+cd Theia/
+cp etc/theia.cfg /etc/
+cp bin/theia /usr/local/bin
+chmod +x /usr/local/bin/theia
+
+
+Theia python edits:
+As of right now there are a few default values in the theia code which were left in place,
+so that they can be used as examples. Here are a few changes that you will need to make. 
+
+Modify the cliargopts() function to point at the correct path for the theia config file(line 16):
+optflags = {'debug':False,'nop':False,'config':'/local/data/filer/etc/theia.cfg','nagios':False,'datafile':None,'pickle':None}
+
+Nagios configuration may also need to be modified depending on your nsca configuration. These options can be found in the send_nsca() function. The main edit that will need to be done here is modifying your nsca command located on line 67:
+cmd = "/usr/local/bin/send_nsca -H nagios -c /usr/local/etc/nagios/send_nsca.conf"
+
+The python subprocess library is used to help simplify obtaining information from the NetApp. These commands will need to be updated to reflect your authentication method. The two that are used in theia use key based authentication and should be updated to reflect the correct path / filename for your SSH keys (line 411 and 472):
+
+cmd = "/usr/bin/ssh -o BatchMode=yes -2 -ax -i /root/.ssh/perfstat_dsa %s 'stats show ifnet'|sed 's/:/ /g'|sort|awk '{print $2}'|uniq|tr -d '\r'" % (hostname)
+
+cmd = "/usr/bin/ssh -o BatchMode=yes -2 -ax -i /root/.ssh/perfstat_dsa %s 'priv set -q diag; echo [sysstat] ; sysstat -c 10 -x 5 ; echo [sysstat end]; echo [stats show]; stats show -I xnsingleton -p xnsingleton; echo [stats start] ; stats start -I xnsingleton -p xnsingleton; echo [df -k]; df -k; echo [df -i]; df -i; echo [end]'" % (hostname)
+
+
+Usage Examples:
+$ ./theia --help
+xtheia [-h|--help] [--nagios] [--debug] [--datafile=<datafile>] [--config=<configfile>] <filer>
+
+$ ./theia --debug <hostname>
+
+$ ./theia --nagios --pickle=/foo/bar/pickle_output
