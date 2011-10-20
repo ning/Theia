@@ -1,0 +1,8 @@
+* JSON Output
+  One thing that theia currently lacks is JSON or XML output. Implementing
+  these features would greatly improve the ability to monitor your infrastructure
+  with theia, as well as provide better granularity for graphing or statistical
+  analysis of NetApp metrics
+
+
+
