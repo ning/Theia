@@ -60,6 +60,7 @@ def cliargopts():
    if optflags['debug']: stderr.write("%s: debug: %s\n%s: debug: filer: %s (%s)\n" % (ME,optflags,ME,filer,hostname))
 
    return(optflags,filer,hostname)
+   oscheck(hostname)
    vifautodiscover(hostname)
 
 def send_nsca(hostname,svc_descr,rt,svc_output):
@@ -423,6 +424,16 @@ class NAPStat(XNSysStat):
       for vif in vifs:
          xnmetrics["NetRE %s" % (vif)] = "ifnet:%s:recv_errors" % (vif)
          xnmetrics["NetSE %s" % (vif)] = "ifnet:%s:send_errors" % (vif)
+
+   def oscheck(hostname):
+      #7.3.1.1
+      cmd = "/usr/bin/ssh -o BatchMode=yes -2 -ax -i /root/.ssh/perfstat_dsa %s 'version'|awk '{print $3}'|sed 's/://g'" % (hostname)
+      p = subprocess.Popen(cmd,shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+      so = p.communicate()[0]
+      os = so.rstrip('\n')
+      if os != "7.3.1.1":
+         print "Theia has only been tested on ONTAP 7.3. You are running: %s" % (os)
+
 
    def Initialize(cls,filer,datafile=None):
       
