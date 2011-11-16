@@ -9,6 +9,7 @@ INSTALLATION
 * cp Theia/etc/theia.cfg /etc/
 * cp Theia/bin/theia /usr/local/bin
 * chmod +x /usr/local/bin/theia
+* cp Theia/etc/xnsingleton.xml <filer>:/<root_volume>/etc/stats/preset/
 
 The destinations paths are examples: you can install the theia binary wherever is convenient; the configuration file is
 entirely arbitrary (it defaults to /etc/theia.cfg, but you can use the --config option to specify another location).
@@ -114,7 +115,9 @@ where:
 
 RUNNING
 
-Theia is intended to be run from cron at a frequency no higher than 5 mimutes.
+Theia is intended to be run from cron at a frequency no higher than 5 mimutes. Before you run Theia for the first time,
+you must connect with the appropriate SSH key and verify the host you're connecting to (i.e., theia expects that the
+filer is already present in ~/.ssh/known_hosts).
 
 ONTAP SUPPORT
 
