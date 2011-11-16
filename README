@@ -22,6 +22,8 @@ results to. Adjust the definition of the cmd variable to your needs:
 
 CONFIGURATION
 
+Overview
+
 Configuring Theia is a relatively simple task, as it uses a simple format to define metrics to watch and alert on. This
 format is based on ONTAP's metric organization, where stats counters are grouped by what object they provide data for.
 Object can have zero or more instances. We extended that model to be prefixed by a filer's hostname. Thus, any given
@@ -38,14 +40,30 @@ In theia.cfg, entries are as follows:
 where <filer> denotes the filer's hostname as shown by the "hostname" command, object, instance and counters are part
 of the ONTAP stats framework (with some exceptions), and critical and warning denote values that would trigger a
 critical or warning alert respectively when compared via the op to the current value, where op is one of '<', '>', '='
-or '-' (don't compare). Wildcards ('*") are allowed for hostnames and instances and _must_ be defined before entries
+or '-' (don't compare). Wildcards ('*") are allowed for filer names and instances and _must_ be defined before entries
 for a specific filer. Partial wild-carding is not supported (ie, 'processor1*' is not supported).
 
 The provided theia.cfg contains a working configuration file with sample metrics and thresholds.
 
-Another bit of configuration required by Theia is the configuration of a stats preset on your filer. This preset is
-assumed to be named xnsingleton.xml, located in the filer's root volume at etc/stats/presets/xnsingleton.xml. A sample
+The Difference Between <filer> and <hostname>
+
+In Theia's world, a hostname is the FQDN of a filer system (in the context of DNS name resolution) whereas a filer
+name is the non-qualified name of the filer as returned when running the hostname command on the filer. In the CLI,
+Theia can use either one: when called with a FQDN, Theia will remove the domain part of the name and use the resulting
+string as the filer name. This split is done at the first '.' (if any) found. Thus, netapp.example.com is a hostname
+that results in a netapp filer name. The configuration file always uses the filer name.
+
+Stats Preset Configuration
+
+Theia uses the stats command in singleton mode in case other stats probes are running, and maps it to a stats preset
+assumed to be named xnsingleton.xml, located in the filer's root volume at etc/stats/presets/xnsingleton.xml. This
+preset defines the set of metrics we're interested in collecting (as otherwise stats returns all metrics). A sample
 file we use across our filers is provided as well.
+
+From Theia's point of view, you can collect and alert on whatever counter you wish. The sysstat counters, however, are
+not configurable (see below).
+
+Sysstat
 
 Theia also captures data via the systat command (data that is not available through the stats command). This data is
 injected into the object:instance:value tree as part of the system and nfsv3 objects:
@@ -94,12 +112,16 @@ where:
   --pickle: location of pickle file for metrics collected (system, volumes and aggregates)
   --debug: debug output
 
+RUNNING
+
+Theia is intended to be run from cron at a frequency no higher than 5 mimutes.
+
 ONTAP SUPPORT
 
 Theia has been tested with ONTAP version 7.3 and 8.0 on FAZ60x0A filers and the ONTAP Simulator. It is known to not work
 on small filers (2000 series).
 
-SAMPLE RUN
+SAMPLE RUN (CLI)
 
 This is a sample run against the ONTAP Simulator running version 8:
 
