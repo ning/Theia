@@ -1,0 +1,60 @@
+<?xml version="1.0" ?>
+<preset orientation="row">
+    <object name="processor">
+        <counter name="processor_busy"></counter>
+    </object>
+    <object name="system">
+        <counter name="cpu_busy"></counter>
+        <counter name="avg_processor_busy"></counter>
+        <counter name="total_processor_busy"></counter>
+        <counter name="net_data_recv"></counter>
+        <counter name="net_data_sent"></counter>
+        <counter name="disk_data_read"></counter>
+        <counter name="disk_data_written"></counter>
+    </object>
+    <object name="ifnet">
+        <instance name="svif0">
+            <counter name="send_errors"></counter>
+            <counter name="recv_errors"></counter>
+            <counter name="recv_drop_packets"></counter>
+        </instance>
+    </object>
+    <object name="nfsv3">
+        <counter name="nfsv3_ops"></counter>
+        <counter name="nfsv3_read_ops"></counter>
+        <counter name="nfsv3_write_ops"></counter>
+        <counter name="nfsv3_read_latency"></counter>
+        <counter name="nfsv3_write_latency"></counter>
+    </object>
+    <object name="nfsv3">
+        <counter name="nfsv3_op_count"></counter>
+        <counter name="nfsv3_op_percent"></counter>
+    </object>
+    <object name="aggregate">
+        <counter name="cp_reads"></counter>
+        <counter name="user_reads"></counter>
+        <counter name="user_writes"></counter>
+        <counter name="wv_fsinfo_blks_total"></counter>
+        <counter name="wv_fsinfo_blks_reserve"></counter>
+        <counter name="wv_fsinfo_blks_used"></counter>
+        <counter name="wvblk_snap_reserve"></counter>
+    </object>
+    <object name="volume">
+        <counter name="avg_latency"></counter>
+        <counter name="write_data"></counter>
+        <counter name="read_data"></counter>
+        <counter name="write_latency"></counter>
+        <counter name="nfs_read_data"></counter>
+        <counter name="nfs_read_latency"></counter>
+        <counter name="nfs_read_ops"></counter>
+        <counter name="nfs_write_data"></counter>
+        <counter name="nfs_write_latency"></counter>
+        <counter name="nfs_write_ops"></counter>
+        <counter name="wv_fsinfo_inos_total"></counter>
+        <counter name="wv_fsinfo_inos_reserve"></counter>
+        <counter name="wv_fsinfo_inos_used"></counter>
+        <counter name="wv_fsinfo_blks_total"></counter>
+        <counter name="wv_fsinfo_blks_reserve"></counter>
+        <counter name="wv_fsinfo_blks_used"></counter>
+    </object>
+</preset>
