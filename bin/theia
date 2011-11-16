@@ -13,7 +13,7 @@ ME='xtheia'
 def cliargopts():
 
    # initialize
-   optflags = {'debug':False,'nop':False,'config':'/local/data/filer/etc/theia.cfg','nagios':False,'sshkeyfile':None,'datafile':None,'pickle':None}
+   optflags = {'debug':False,'nop':False,'config':'/etc/theia.cfg','nagios':False,'sshkeyfile':None,'datafile':None,'pickle':None}
    filer = None
 
    # parse cli options

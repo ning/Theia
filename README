@@ -1,41 +1,394 @@
-This is theia, a NetApp monitoring tool that works with Nagios and Zenoss.
+Theia is a NetApp filer monitoring tool written in Python that can send alerts to Nagios via passive checks and
+write csv files for Zenoss (or other tool) consumption to process and display performance metrics. Generally speaking,
+Theia must run as root (this will change in the near future0 primarily because it needs privileged access to the filers
+in order to display all available metrics.
 
-Basic Configuration:
-git clone git@github.com:ning/Theia.git
-cd Theia/
-cp etc/theia.cfg /etc/
-cp bin/theia /usr/local/bin
-chmod +x /usr/local/bin/theia
+INSTALLATION
 
+* git clone git@github.com:ning/Theia.git
+* cp Theia/etc/theia.cfg /etc/
+* cp Theia/bin/theia /usr/local/bin
+* chmod +x /usr/local/bin/theia
 
-Theia python edits:
-As of right now there are a few default values in the theia code which were left in place,
-so that they can be used as examples. Here are a few changes that you will need to make. 
+The destinations paths are examples: you can install the theia binary wherever is convenient; the configuration file is
+entirely arbitrary (it defaults to /etc/theia.cfg, but you can use the --config option to specify another location).
 
-Modify the cliargopts() function to point at the correct path for the theia config file(line 16):
-optflags = {'debug':False,'nop':False,'config':'/local/data/filer/etc/theia.cfg','nagios':False,'datafile':None,'pickle':None}
+There is some amount of hardcoded configuration options that currently require tweaking the code to use. They affect
+the Nagios functionality; if you don't plan on using these, no changes are required. The send_nsca(0 function uses
+hardcoded locations for the send_nsca binary and configuration file as well as the target Nagios host to submit test
+results to. Adjust the definition of the cmd variable to your needs:
 
-Nagios configuration may also need to be modified depending on your nsca configuration. These options can be found in the send_nsca() function. The main edit that will need to be done here is modifying your nsca command located on line 67:
-cmd = "/usr/local/bin/send_nsca -H nagios -c /usr/local/etc/nagios/send_nsca.conf"
+  cmd = "/usr/local/bin/send_nsca -H nagios -c /usr/local/etc/nagios/send_nsca.conf"
 
-The python subprocess library is used to help simplify obtaining information from the NetApp. These commands will need to be updated to reflect your authentication method. The two that are used in theia use key based authentication and should be updated to reflect the correct path / filename for your SSH keys (line 411 and 472):
+CONFIGURATION
 
-cmd = "/usr/bin/ssh -o BatchMode=yes -2 -ax -i /root/.ssh/perfstat_dsa %s 'stats show ifnet'|sed 's/:/ /g'|sort|awk '{print $2}'|uniq|tr -d '\r'" % (hostname)
+Configuring Theia is a relatively simple task, as it uses a simple format to define metrics to watch and alert on. This
+format is based on ONTAP's metric organization, where stats counters are grouped by what object they provide data for.
+Object can have zero or more instances. We extended that model to be prefixed by a filer's hostname. Thus, any given
+counter (metric) can be denoted as follows (in Theia):
 
-cmd = "/usr/bin/ssh -o BatchMode=yes -2 -ax -i /root/.ssh/perfstat_dsa %s 'priv set -q diag; echo [sysstat] ; sysstat -c 10 -x 5 ; echo [sysstat end]; echo [stats show]; stats show -I xnsingleton -p xnsingleton; echo [stats start] ; stats start -I xnsingleton -p xnsingleton; echo [df -k]; df -k; echo [df -i]; df -i; echo [end]'" % (hostname)
+  filer:object:instance:value
 
+See "Storage system information and the stats command" section in the NetApp's ONTAP Systems Administration Guide.
 
-Usage Examples:
-$ ./theia --help
-xtheia [-h|--help] [--nagios] [--debug] [--datafile=<datafile>] [--config=<configfile>] <filer>
+In theia.cfg, entries are as follows:
 
-$ ./theia --debug <hostname>
+  filer:object:instance:counter:critical:warning:op
 
-$ ./theia --nagios --pickle=/foo/bar/pickle_output
+where <filer> denotes the filer's hostname as shown by the "hostname" command, object, instance and counters are part
+of the ONTAP stats framework (with some exceptions), and critical and warning denote values that would trigger a
+critical or warning alert respectively when compared via the op to the current value, where op is one of '<', '>', '='
+or '-' (don't compare). Wildcards ('*") are allowed for hostnames and instances and _must_ be defined before entries
+for a specific filer. Partial wild-carding is not supported (ie, 'processor1*' is not supported).
 
+The provided theia.cfg contains a working configuration file with sample metrics and thresholds.
 
-Hardware / OS Support:
-ONTAP 7.3
-FAS6080A
-FAS6070A
+Another bit of configuration required by Theia is the configuration of a stats preset on your filer. This preset is
+assumed to be named xnsingleton.xml, located in the filer's root volume at etc/stats/presets/xnsingleton.xml. A sample
+file we use across our filers is provided as well.
 
+Theia also captures data via the systat command (data that is not available through the stats command). This data is
+injected into the object:instance:value tree as part of the system and nfsv3 objects:
+
+xnmetrics = {
+         'APB'       : "system:system:avg_processor_busy",
+         'CIFSO'     : None,
+         'CPU'       : "system:system:cpu_busy",
+         'CPtime'    : "system:system:cp_time",
+         'CacheAge'  : "system:system:cache_age",
+         'CacheHit'  : "system:system:cache_hit",
+         'DiskRead'  : "system:system:disk_data_read",
+         'DiskUtil'  : "system:system:disk_busy",
+         'DiskWrite' : "system:system:disk_data_written",
+         'HTTPO'     : None,
+         'NFSO'      : "nfsv3:nfs:nfsv3_ops",
+         'NFSRL'     : "nfsv3:nfs:nfsv3_read_latency",
+         'NFSRO'     : "nfsv3:nfs:nfsv3_read_ops",
+         'NFSWL'     : "nfsv3:nfs:nfsv3_write_latency",
+         'NFSWO'     : "nfsv3:nfs:nfsv3_write_ops",
+         'NetIn'     : "system:system:net_data_recv",
+         'NetOut'    : "system:system:net_data_sent",
+         'TPB'       : "system:system:total_processor_busy",
+         'TapeRead'  : None,
+         'TapeWrite' : None,
+         'TotalO'    : "system:system:total_ops",
+         'cpu0'      : "processor:processor0:processor_busy",
+         'cpu1'      : "processor:processor1:processor_busy",
+         'cpu2'      : "processor:processor2:processor_busy",
+         'cpu3'      : "processor:processor3:processor_busy"
+}
+
+This approach is nice in that when it comes to evaluate counters, the code is homogeneous (if not necessarily pretty).
+But it also hardcodes the number of CPU's available in your filers. A fix for this is upcoming.
+
+SYNTAX
+
+  theia [-h|--help] [--nagios] [--debug] [--datafile=<datafile>] [--config=<configfile>] --sshkeyfile=<file> <filer>
+
+where:
+
+  --datafile: file containing sample sysstat and stats output (useful for development and debugging)
+  --config: location of configuration file
+  --sshkeyfile: location of SSH keys used to access the filer without entring a password (passwordless or agent)
+  --nagios: enable threshold evaluation and nagios passive test submission
+  --pickle: location of pickle file for metrics collected (system, volumes and aggregates)
+  --debug: debug output
+
+ONTAP SUPPORT
+
+Theia has been tested with ONTAP version 7.3 and 8.0 on FAZ60x0A filers and the ONTAP Simulator. It is known to not work
+on small filers (2000 series).
+
+SAMPLE RUN
+
+This is a sample run against the ONTAP Simulator running version 8:
+
+root@adminhost:~#theia --sshkeyfile=/root/.ssh/id_rsa.nap --debug subzero
+xtheia: debug: {'datafile': None, 'nop': False, 'sshkeyfile': '/root/.ssh/id_rsa.nap', 'debug': True, 'pickle': None, 'nagios': False, 'config': '/etc/theia.cfg'}
+xtheia: debug: filer: subzero (subzero)
+xtheia: debug: reading /etc/theia.cfg configuration file
+xtheia: debug: line: *:system:system:avg_processor_busy:90:95:>
+xtheia: debug: line: *:system:system:total_processor_busy:350:370:>
+xtheia: debug: line: *:processor:*:processor_busy:90:95:>
+xtheia: debug: line: *:nfsv3:nfs:nfsv3_ops:40000:50000:>
+xtheia: debug: line: *:nfsv3:nfs:nfsv3_read_latency:20:15:>
+xtheia: debug: line: *:nfsv3:nfs:nfsv3_write_latency:7:15:>
+xtheia: debug: line: *:system:system:cp_time:90:100:>
+xtheia: debug: line: *:system:system:cache_hit:10:20:<
+xtheia: debug: line: *:system:system:disk_busy:87:95:-
+xtheia: debug: line: *:volume:*:df_i_capacity:82:87:>
+xtheia: debug: line: *:volume:*:df_k_capacity:98:99:>
+xtheia: debug: line: *:volume:root:df_k_capacity:50:60:>
+xtheia: debug: thres: [system:system:avg_processor_busy] => w:90 c:95 op:>
+xtheia: debug: thres: [system:system:total_processor_busy] => w:350 c:370 op:>
+xtheia: debug: thres: [processor:*:processor_busy] => w:90 c:95 op:>
+xtheia: debug: thres: [nfsv3:nfs:nfsv3_ops] => w:40000 c:50000 op:>
+xtheia: debug: thres: [nfsv3:nfs:nfsv3_read_latency] => w:20 c:15 op:>
+xtheia: debug: thres: [nfsv3:nfs:nfsv3_write_latency] => w:7 c:15 op:>
+xtheia: debug: thres: [system:system:cp_time] => w:90 c:100 op:>
+xtheia: debug: thres: [system:system:cache_hit] => w:10 c:20 op:<
+xtheia: debug: thres: [volume:*:df_i_capacity] => w:82 c:87 op:>
+xtheia: debug: thres: [volume:*:df_k_capacity] => w:98 c:99 op:>
+xtheia: debug: thres: [volume:root:df_k_capacity] => w:50 c:60 op:>
+xtheia: debug:  line: [sysstat]
+xtheia: debug:  line: CPU    NFS   CIFS   HTTP   Total     Net   kB/s    Disk   kB/s    Tape   kB/s  Cache  Cache    CP  CP  Disk   OTHER    FCP  iSCSI     FCP   kB/s   iSCSI   kB/s
+xtheia: debug:  line: in    out    read  write    read  write    age    hit  time  ty  util                            in    out      in    out
+xtheia: debug:  line: 14%     78      0      0      81    2271     73    1462   3332       0      0     3    100%  100%  Bf   94%       3      0      0       0      0       0      0
+xtheia: debug:  line: 13%     77      0      0      96    2822     83    1200   3837       0      0   >60    100%  100%  Bf   94%      19      0      0       0      0       0      0
+xtheia: debug:  line: 14%    147      0      0     148    4735    144    1801   3682       0      0     3     99%  100%  Bf   90%       1      0      0       0      0       0      0
+xtheia: debug:  line: 12%     69      0      0      70    2367     71    1256   3877       0      0     3    100%  100%  Bf   95%       1      0      0       0      0       0      0
+xtheia: debug:  line: 12%     69      0      0      72    2374     72    1166   3712       0      0     3    100%  100%  Bf   94%       3      0      0       0      0       0      0
+xtheia: debug:  line: 13%     69      0      0      70    2376     71    1165   3584       0      0     3    100%  100%  Bv   89%       1      0      0       0      0       0      0
+xtheia: debug:  line: 18%    137      0      0     139    4421    136    1334   3230       0      0     3    100%  100%  Bf   91%       2      0      0       0      0       0      0
+xtheia: debug:  line: 13%     69      0      0      70    2692     80     761   4020       0      0     3    100%  100%  Bf   93%       1      0      0       0      0       0      0
+xtheia: debug:  line: 13%     69      0      0      72    2374     71    1287   3591       0      0     3    100%  100%  Bf   96%       3      0      0       0      0       0      0
+xtheia: debug:  line: 16%    137      0      0     185    4731    174     854   3869       0      0     3    100%  100%  Bf   92%      48      0      0       0      0       0      0
+xtheia: debug:  line: [sysstat end]
+xtheia: debug:  stat: [system][system][cp_time][100%]
+xtheia: debug:  stat: [system][system][cache_hit][99%]
+xtheia: debug:  stat: [system][system][cache_age][8s]
+xtheia: debug:  stat: [system][system][disk_busy][92%]
+xtheia: debug:  stat: [system][system][total_ops][100/s]
+xtheia: debug:  line: [stats show]
+xtheia: debug:  line: StatisticsID: xnsingleton
+xtheia: debug:  line: processor:processor0:processor_busy:17%
+xtheia: debug:  stat: [processor][processor0][processor_busy][17%]
+xtheia: debug:  line: processor:processor1:processor_busy:17%
+xtheia: debug:  stat: [processor][processor1][processor_busy][17%]
+xtheia: debug:  line: processor:processor2:processor_busy:16%
+xtheia: debug:  stat: [processor][processor2][processor_busy][16%]
+xtheia: debug:  line: processor:processor3:processor_busy:2%
+xtheia: debug:  stat: [processor][processor3][processor_busy][2%]
+xtheia: debug:  line: system:system:cpu_busy:14%
+xtheia: debug:  stat: [system][system][cpu_busy][14%]
+xtheia: debug:  line: system:system:avg_processor_busy:13%
+xtheia: debug:  stat: [system][system][avg_processor_busy][13%]
+xtheia: debug:  line: system:system:total_processor_busy:53%
+xtheia: debug:  stat: [system][system][total_processor_busy][53%]
+xtheia: debug:  line: system:system:net_data_recv:2844KB/s
+xtheia: debug:  stat: [system][system][net_data_recv][2844KB/s]
+xtheia: debug:  line: system:system:net_data_sent:89KB/s
+xtheia: debug:  stat: [system][system][net_data_sent][89KB/s]
+xtheia: debug:  line: system:system:disk_data_read:1162KB/s
+xtheia: debug:  stat: [system][system][disk_data_read][1162KB/s]
+xtheia: debug:  line: system:system:disk_data_written:3490KB/s
+xtheia: debug:  stat: [system][system][disk_data_written][3490KB/s]
+xtheia: debug:  line: ifnet:e0a:send_errors:0/s
+xtheia: debug:  stat: [ifnet][e0a][send_errors][0/s]
+xtheia: debug:  line: ifnet:e0a:recv_errors:0/s
+xtheia: debug:  stat: [ifnet][e0a][recv_errors][0/s]
+xtheia: debug:  line: ifnet:e0a:recv_drop_packets:0/s
+xtheia: debug:  stat: [ifnet][e0a][recv_drop_packets][0/s]
+xtheia: debug:  line: ifnet:e0b:send_errors:0/s
+xtheia: debug:  stat: [ifnet][e0b][send_errors][0/s]
+xtheia: debug:  line: ifnet:e0b:recv_errors:80218286/s
+xtheia: debug:  stat: [ifnet][e0b][recv_errors][80218286/s]
+xtheia: debug:  line: ifnet:e0b:recv_drop_packets:0/s
+xtheia: debug:  stat: [ifnet][e0b][recv_drop_packets][0/s]
+xtheia: debug:  line: ifnet:e0c:send_errors:0/s
+xtheia: debug:  stat: [ifnet][e0c][send_errors][0/s]
+xtheia: debug:  line: ifnet:e0c:recv_errors:80218286/s
+xtheia: debug:  stat: [ifnet][e0c][recv_errors][80218286/s]
+xtheia: debug:  line: ifnet:e0c:recv_drop_packets:0/s
+xtheia: debug:  stat: [ifnet][e0c][recv_drop_packets][0/s]
+xtheia: debug:  line: ifnet:e0d:send_errors:0/s
+xtheia: debug:  stat: [ifnet][e0d][send_errors][0/s]
+xtheia: debug:  line: ifnet:e0d:recv_errors:80218286/s
+xtheia: debug:  stat: [ifnet][e0d][recv_errors][80218286/s]
+xtheia: debug:  line: ifnet:e0d:recv_drop_packets:0/s
+xtheia: debug:  stat: [ifnet][e0d][recv_drop_packets][0/s]
+xtheia: debug:  line: ifnet:losk:send_errors:0/s
+xtheia: debug:  stat: [ifnet][losk][send_errors][0/s]
+xtheia: debug:  line: ifnet:losk:recv_errors:0/s
+xtheia: debug:  stat: [ifnet][losk][recv_errors][0/s]
+xtheia: debug:  line: ifnet:losk:recv_drop_packets:0/s
+xtheia: debug:  stat: [ifnet][losk][recv_drop_packets][0/s]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_ops:86/s
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_ops][86/s]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_read_ops:0/s
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_read_ops][0/s]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_write_ops:83/s
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_write_ops][83/s]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_read_latency:0ms
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_read_latency][0ms]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_write_latency:632.25ms
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_write_latency][632.25ms]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.null:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.null][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.getattr:36
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.getattr][36]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.setattr:57
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.setattr][57]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.lookup:18
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.lookup][18]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.access:12
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.access][12]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.readlink:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.readlink][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.read:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.read][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.write:4468
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.write][4468]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.create:8
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.create][8]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.mkdir:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.mkdir][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.symlink:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.symlink][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.mknod:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.mknod][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.remove:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.remove][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.rmdir:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.rmdir][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.rename:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.rename][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.link:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.link][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.readdir:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.readdir][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.readdirplus:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.readdirplus][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.fsstat:7
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.fsstat][7]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.fsinfo:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.fsinfo][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.pathconf:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.pathconf][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_count.commit:0
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_count.commit][0]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.null:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.null][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.getattr:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.getattr][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.setattr:1%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.setattr][1%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.lookup:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.lookup][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.access:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.access][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.readlink:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.readlink][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.read:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.read][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.write:97%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.write][97%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.create:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.create][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.mkdir:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.mkdir][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.symlink:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.symlink][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.mknod:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.mknod][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.remove:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.remove][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.rmdir:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.rmdir][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.rename:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.rename][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.link:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.link][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.readdir:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.readdir][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.readdirplus:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.readdirplus][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.fsstat:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.fsstat][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.fsinfo:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.fsinfo][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.pathconf:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.pathconf][0%]
+xtheia: debug:  line: nfsv3:nfs:nfsv3_op_percent.commit:0%
+xtheia: debug:  stat: [nfsv3][nfs][nfsv3_op_percent.commit][0%]
+xtheia: debug:  line: aggregate:aggr0:cp_reads:44/s
+xtheia: debug:  stat: [aggregate][aggr0][cp_reads][44/s]
+xtheia: debug:  line: aggregate:aggr0:user_reads:2/s
+xtheia: debug:  stat: [aggregate][aggr0][user_reads][2/s]
+xtheia: debug:  line: aggregate:aggr0:user_writes:115/s
+xtheia: debug:  stat: [aggregate][aggr0][user_writes][115/s]
+xtheia: debug:  line: aggregate:aggr0:wv_fsinfo_blks_total:5632000
+xtheia: debug:  stat: [aggregate][aggr0][wv_fsinfo_blks_total][5632000]
+xtheia: debug:  line: aggregate:aggr0:wv_fsinfo_blks_reserve:563200
+xtheia: debug:  stat: [aggregate][aggr0][wv_fsinfo_blks_reserve][563200]
+xtheia: debug:  line: aggregate:aggr0:wv_fsinfo_blks_used:331447
+xtheia: debug:  stat: [aggregate][aggr0][wv_fsinfo_blks_used][331447]
+xtheia: debug:  line: aggregate:aggr0:wvblk_snap_reserve:0
+xtheia: debug:  stat: [aggregate][aggr0][wvblk_snap_reserve][0]
+xtheia: debug:  line: volume:root:avg_latency:13742.26us
+xtheia: debug:  stat: [volume][root][avg_latency][13742.26us]
+xtheia: debug:  line: volume:root:write_data:2186b/s
+xtheia: debug:  stat: [volume][root][write_data][2186b/s]
+xtheia: debug:  line: volume:root:read_data:12418b/s
+xtheia: debug:  stat: [volume][root][read_data][12418b/s]
+xtheia: debug:  line: volume:root:write_latency:95289.73us
+xtheia: debug:  stat: [volume][root][write_latency][95289.73us]
+xtheia: debug:  line: volume:root:nfs_read_data:12361b/s
+xtheia: debug:  stat: [volume][root][nfs_read_data][12361b/s]
+xtheia: debug:  line: volume:root:nfs_read_latency:43.72us
+xtheia: debug:  stat: [volume][root][nfs_read_latency][43.72us]
+xtheia: debug:  line: volume:root:nfs_read_ops:1/s
+xtheia: debug:  stat: [volume][root][nfs_read_ops][1/s]
+xtheia: debug:  line: volume:root:nfs_write_data:241b/s
+xtheia: debug:  stat: [volume][root][nfs_write_data][241b/s]
+xtheia: debug:  line: volume:root:nfs_write_latency:83920.08us
+xtheia: debug:  stat: [volume][root][nfs_write_latency][83920.08us]
+xtheia: debug:  line: volume:root:nfs_write_ops:1/s
+xtheia: debug:  stat: [volume][root][nfs_write_ops][1/s]
+xtheia: debug:  line: volume:root:wv_fsinfo_blks_total:291280
+xtheia: debug:  stat: [volume][root][wv_fsinfo_blks_total][291280]
+xtheia: debug:  line: volume:root:wv_fsinfo_blks_reserve:29136
+xtheia: debug:  stat: [volume][root][wv_fsinfo_blks_reserve][29136]
+xtheia: debug:  line: volume:root:wv_fsinfo_blks_used:52694
+xtheia: debug:  stat: [volume][root][wv_fsinfo_blks_used][52694]
+xtheia: debug:  line: volume:data:avg_latency:581745.24us
+xtheia: debug:  stat: [volume][data][avg_latency][581745.24us]
+xtheia: debug:  line: volume:data:write_data:2731574b/s
+xtheia: debug:  stat: [volume][data][write_data][2731574b/s]
+xtheia: debug:  line: volume:data:read_data:0b/s
+xtheia: debug:  stat: [volume][data][read_data][0b/s]
+xtheia: debug:  line: volume:data:write_latency:631328.37us
+xtheia: debug:  stat: [volume][data][write_latency][631328.37us]
+xtheia: debug:  line: volume:data:nfs_read_data:0b/s
+xtheia: debug:  stat: [volume][data][nfs_read_data][0b/s]
+xtheia: debug:  line: volume:data:nfs_read_latency:0us
+xtheia: debug:  stat: [volume][data][nfs_read_latency][0us]
+xtheia: debug:  line: volume:data:nfs_read_ops:0/s
+xtheia: debug:  stat: [volume][data][nfs_read_ops][0/s]
+xtheia: debug:  line: volume:data:nfs_write_data:2731574b/s
+xtheia: debug:  stat: [volume][data][nfs_write_data][2731574b/s]
+xtheia: debug:  line: volume:data:nfs_write_latency:631328.37us
+xtheia: debug:  stat: [volume][data][nfs_write_latency][631328.37us]
+xtheia: debug:  line: volume:data:nfs_write_ops:83/s
+xtheia: debug:  stat: [volume][data][nfs_write_ops][83/s]
+xtheia: debug:  line: volume:data:wv_fsinfo_blks_total:4369072
+xtheia: debug:  stat: [volume][data][wv_fsinfo_blks_total][4369072]
+xtheia: debug:  line: volume:data:wv_fsinfo_blks_reserve:436912
+xtheia: debug:  stat: [volume][data][wv_fsinfo_blks_reserve][436912]
+xtheia: debug:  line: volume:data:wv_fsinfo_blks_used:224300
+xtheia: debug:  stat: [volume][data][wv_fsinfo_blks_used][224300]
+xtheia: debug:  line: [stats start]
+xtheia: debug:  line: Stats identifier 'xnsingleton' in use, resetting.
+xtheia: debug:  line: [df -k]
+xtheia: debug:  line: Filesystem               total       used      avail capacity  Mounted on
+xtheia: debug:  line: /vol/root/            996148KB   158380KB   837768KB      16%  /vol/root/
+xtheia: debug:  stat: [volume][root][df_k_capacity][16%]
+xtheia: debug:  line: /vol/root/.snapshot    52428KB    81132KB        0KB     155%  /vol/root/.snapshot
+xtheia: debug:  line: /vol/data/          14942208KB   908188KB 14034020KB       6%  /vol/data/
+xtheia: debug:  stat: [volume][data][df_k_capacity][6%]
+xtheia: debug:  line: /vol/data/.snapshot   786432KB        0KB   786432KB       0%  /vol/data/.snapshot
+xtheia: debug:  line: [df -i]
+xtheia: debug:  line: Filesystem               iused      ifree  %iused  Mounted on
+xtheia: debug:  line: /vol/root/                4932      26190     16%  /vol/root/
+xtheia: debug:  stat: [volume][root][df_i_capacity][16%]
+xtheia: debug:  line: /vol/data/                1610     465320      0%  /vol/data/
+xtheia: debug:  stat: [volume][data][df_i_capacity][0%]
+xtheia: debug:  line: [end]
+
+This run does not perform threshold evaluation (since the --nagios flag was not provided).
+
+FUTURES
+
+* Remove all traces of hardcoded "stuff"
+* Rework the pickle code to be less picky about what it outputs
+* Provide Zenoss integration tool (use pickled data)
